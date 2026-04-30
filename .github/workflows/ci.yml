@@ -37,10 +37,11 @@ jobs:
           GITHUB_CLIENT_SECRET: ci
           GITHUB_CALLBACK_URL: http://localhost:3004/auth/github/callback
           GITHUB_OAUTH_URL: https://github.com/login/oauth/authorize
-        run: node --input-type=module <<'EOF'
+        run: |
+          node --input-type=module <<'EOF'
           import './src/app.js';
           console.log('Module graph resolved successfully');
-        EOF
+          EOF
 
   test:
     name: Tests
@@ -56,9 +57,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s
           --health-retries 5
 
     steps:
