@@ -3,6 +3,7 @@
 // All Stage 2 endpoints preserved exactly.
 // ---------------------------------------------------------------------------
 import { Router } from "express";
+import busboy from "busboy";
 
 import { parseNaturalLanguage } from "../nlp.js";
 import { sendError } from "../utils.js";
@@ -13,6 +14,7 @@ import {
   deleteProfile,
   exportProfiles,
 } from "./service.js";
+import { processCSVStream } from "./ingest.js";
 import authorize from "../middleware/authorize.js";
 
 const router = Router();
@@ -153,6 +155,38 @@ router.delete("/:id", authorize('admin'), async (req, res) => {
   try {
     await deleteProfile(req.params.id);
     return res.status(204).send();
+  } catch (err) {
+    return sendError(res, err);
+  }
+});
+
+// ── POST /api/profiles/import
+router.post("/import", authorize("admin"), async (req, res) => {
+  const contentType = req.headers["content-type"] ?? "";
+  if (!contentType.includes("multipart/form-data")) {
+    return res.status(400).json({
+      status:  "error",
+      message: "Expected multipart/form-data with a CSV file field",
+    });
+  }
+  try {
+    const bb = busboy({ headers: req.headers, limits: { files: 1 } });
+    let fileFound = false;
+    let resultResolve;
+    const resultPromise = new Promise((resolve) => { resultResolve = resolve; });
+    bb.on("file", (_fieldname, fileStream) => {
+      fileFound = true;
+      processCSVStream(fileStream).then(resultResolve);
+    });
+    bb.on("close", async () => {
+      if (!fileFound) {
+        return res.status(400).json({ status: "error", message: "No file field found in upload" });
+      }
+      const stats = await resultPromise;
+      return res.status(200).json({ status: "success", ...stats });
+    });
+    bb.on("error", (err) => sendError(res, err));
+    req.pipe(bb);
   } catch (err) {
     return sendError(res, err);
   }

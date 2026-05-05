@@ -11,6 +11,8 @@ import { URLSearchParams } from "url";
 
 import { query } from "../db/index.js";
 import { ApiError, classifyAgeGroup, formatProfile } from "../utils.js";
+import { cache } from "../lib/cache.js";
+import { normalizeFilters, makeCacheKey } from "./normalize.js";
 
 // ── ISO-3166-1 alpha-2 → full country name ──────────────────────────────────
 export const ISO_TO_NAME = {
@@ -248,6 +250,12 @@ export async function listProfiles(rawQuery, baseUrl = '/api/profiles', linkQuer
   const { countSql, dataSql, countParams, dataParams, page, limit } =
     buildQuery(rawQuery);
 
+  // Normalize + cache check before hitting the DB
+  const normalized = normalizeFilters(rawQuery);
+  const cacheKey   = makeCacheKey(normalized);
+  const cached     = await cache.get(cacheKey);
+  if (cached) return cached;
+
   const [countResult, dataResult] = await Promise.all([
     query(countSql, countParams),
     query(dataSql, dataParams),
@@ -260,7 +268,12 @@ export async function listProfiles(rawQuery, baseUrl = '/api/profiles', linkQuer
   const linksObj = new Links(baseUrl, linkQuery ?? rawQuery, page, limit, total_pages);
   const links = linksObj.getLinks();
 
-  return { rows: dataResult.rows.map(formatProfile), total, page, limit, total_pages, links };
+  const result = { rows: dataResult.rows.map(formatProfile), total, page, limit, total_pages, links };
+
+  // Cache result — 5-minute TTL acceptable for analytical read-heavy workload
+  await cache.set(cacheKey, result);
+
+  return result;
 }
 
 /**
@@ -311,6 +324,10 @@ export async function createProfile(rawName) {
     ]
   );
 
+  // Invalidate all cached list results — a new profile changes counts
+  // and may appear in any filter combination
+  await cache.invalidatePrefix("profiles:");
+
   return { profile: formatProfile(result.rows[0]), created: true };
 }
 
@@ -337,4 +354,5 @@ export async function exportProfiles(rawQuery) {
 export async function deleteProfile(id) {
   const result = await query("DELETE FROM profiles WHERE id = $1", [id]);
   if (result.rowCount === 0) throw new ApiError(404, "Profile not found");
+  await cache.invalidatePrefix("profiles:");
 }
