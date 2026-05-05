@@ -6,6 +6,13 @@ const { Pool } = pg;
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DB_SSL === "true" ? { rejectUnauthorized: false } : false,
+  // Tuned for read-heavy, low-thousands-of-queries-per-minute workload.
+  // Default max is 10 — increase to allow more concurrent queries.
+  // idleTimeoutMillis releases connections that have been idle to avoid
+  // exhausting the DB's max_connections on the hosted tier.
+  max:                    20,
+  idleTimeoutMillis:      30_000,
+  connectionTimeoutMillis: 5_000,
 });
 
 export const query = (text, params) => pool.query(text, params);
@@ -32,6 +39,21 @@ export const initDB = async () => {
     CREATE INDEX IF NOT EXISTS idx_profiles_gender_probability  ON profiles(gender_probability);
     CREATE INDEX IF NOT EXISTS idx_profiles_country_probability ON profiles(country_probability);
     CREATE INDEX IF NOT EXISTS idx_profiles_created_at          ON profiles(created_at);
+
+    -- Compound indexes for the most common multi-column filter patterns.
+    -- These eliminate sequential scans when two or more filters are combined,
+    -- which is the typical analyst query (gender + country, gender + country + age_group).
+    CREATE INDEX IF NOT EXISTS idx_profiles_gender_country
+      ON profiles(gender, country_id);
+
+    CREATE INDEX IF NOT EXISTS idx_profiles_gender_country_age_group
+      ON profiles(gender, country_id, age_group);
+
+    CREATE INDEX IF NOT EXISTS idx_profiles_country_age_group
+      ON profiles(country_id, age_group);
+
+    CREATE INDEX IF NOT EXISTS idx_profiles_age_gender_country
+      ON profiles(age, gender, country_id);
   `);
 
   await pool.query(`
